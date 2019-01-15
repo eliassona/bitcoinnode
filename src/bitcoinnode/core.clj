@@ -2,6 +2,7 @@
   (:import [java.net Socket]
            [java.io BufferedInputStream BufferedOutputStream ByteArrayInputStream]
            [java.nio.charset StandardCharsets]
+           [java.time Instant]
            [java.security MessageDigest]))
 
 
@@ -37,12 +38,7 @@
   (bytes->int (calc-checksum-as-bytes bytes) :little))
   
 
-(defn open-socket [host port]
-  (let [s (Socket. host port)]
-    {:socket s
-     :in (BufferedInputStream. (.getInputStream s))
-     :out (BufferedOutputStream. (.getOutputStream s))}
-    ))
+
 
 
 (defn read-bytes [in n] 
@@ -71,6 +67,16 @@
 (defn read-var-str [in]
   (let [n (read-var-int in)]
     (String. (read-bytes in n) StandardCharsets/US_ASCII)))
+
+(defn str->var-bytes [s]
+  (let [n (count s)
+        bytes (.getBytes s)]
+    (cond 
+      (< n 0xfd) (concat [n] bytes)
+      (<= n Short/MAX_VALUE) (concat [0xfd] (int->bytes n 2 :little) bytes) 
+      (<= n Short/MAX_VALUE) (concat [0xfe] (int->bytes n 4 :little) bytes)
+      :else (concat [0xff] (int->bytes n 8 :little) bytes)
+    )))
 
 (defn read-timestamp [in nr-of-bytes]
   (let [bytes (read-bytes in nr-of-bytes)]
@@ -213,15 +219,60 @@
     cmd)) ;TODO higher versions
     
 
-(defmethod encode-cmd "version" [msg]
-  (let [pl (:payload msg)]
+
+(defn encode-version-cmd>=106 [version pl]
+  (if (>= version 106)
     (concat
-      (int->bytes (:version pl) 4 :little) 
+      (network-address->bytes (:addr-from pl))
+      (int->bytes (:nounce pl) 8 :little)
+      (str->var-bytes (:user-agent pl))
+      (int->bytes (:start-height pl) 4 :little)
+      )
+    []))
+
+(defn encode-version-cmd>=70001 [version pl]
+  (if (>= version 70001)
+    (concat
+      (int->bytes (:relay pl) 1 :little)
+      )
+    []))
+
+(defmethod encode-cmd "version" [msg]
+  (let [pl (:payload msg)
+        version (:version pl)]
+    (concat
+      (int->bytes version 4 :little) 
       (int->bytes (services->int (:services pl)) 8 :little)
-      (network-address->bytes (:recv-network-address pl)))))
+      (int->bytes (:timestamp pl) 8 :little)
+      (network-address->bytes (:addr-recv pl))
+      (encode-version-cmd>=106 version pl)
+      (encode-version-cmd>=70001 version pl))))
                   
   
 
+(defn open-socket [host port]
+  (let [s (Socket. host port)]
+    {:socket s
+     :in (BufferedInputStream. (.getInputStream s))
+     :out (BufferedOutputStream. (.getOutputStream s))}
+    ))
 
 (def mainnet 0xD9B4BEF9)
 (def testnet3 0x0709110B)
+
+
+(def a-ver-msg 
+  {:cmd "version", :payload 
+   {:version 70001, 
+    :timestamp (.getEpochSecond (Instant/now)) 
+    :services {},
+    :nounce (long (rand Long/MAX_VALUE))
+    :user-agent "bixus"
+    :start-height 0
+    :relay 0
+    :addr-from
+    {:time 0, :ip [88 129 173 173], 
+     :port 8333}
+    :addr-recv
+    {:time 0, :ip [81 243 68 123], 
+     :port 8333}}})
