@@ -165,7 +165,7 @@
   ;TODO time  
   (concat
     (if version-cmd? [] (int->bytes (:time addr) 4 :little))
-    (int->bytes (services->int (:services addr)) 8 :little)
+    (int->bytes (services->int (:services addr)) 8 :big)
     (ip->bytes (:ip addr))
     (int->bytes (:port addr) 2 :big)
     )
@@ -178,8 +178,8 @@
 (defn read-version [in]
   (read-int in 4 :big))
 
-(defmulti decode-cmd (fn [msg] (:cmd msg)))
-(defmulti encode-cmd (fn [msg] (:cmd msg)))
+(defmulti decode-cmd (fn [cmd in] cmd))
+(defmulti encode-cmd (fn [cmd payload] cmd))
 
 
 (defn read-msg [in magic]
@@ -191,13 +191,12 @@
                :checksum (read-checksum in)
                }
             ]
-        m
-        (decode-cmd (assoc m :payload (read-payload in (:length m) (:checksum m)))))
+        (assoc m :payload (decode-cmd (:cmd m) (read-payload in (:length m) (:checksum m)))))
       (throw (IllegalStateException. "Wrong network magic value")))))
   
 
 (defn msg->bytes [msg magic]
-  (let [payload (encode-cmd msg)]
+  (let [payload (encode-cmd (:cmd msg) (:payload msg))]
     (concat 
       (int->bytes magic 4 :little)
       (cmd->bytes (:cmd msg))
@@ -228,16 +227,14 @@
       in)
     cmd))
 
-(defmethod decode-cmd "version" [msg] 
-  (let [in (:payload msg)
-        cmd {:header msg
-             :version (read-version in)
+(defmethod decode-cmd "version" [_ in] 
+  (let [cmd {:version (read-version in)
              :services (read-services in)
              :timestamp (read-timestamp in 8)
              :addr-recv (read-network-address in true)
              }
-        version (:version cmd)
-        ]
+     version (:version cmd)
+     ]
     (decode-version-cmd>=106 version cmd in)))
     
 
@@ -245,7 +242,7 @@
 (defn encode-version-cmd>=106 [version pl]
   (if (>= version 106)
     (concat
-      (network-address->bytes (:addr-from pl))
+      (network-address->bytes (:addr-from pl) true)
       (int->bytes (:nounce pl) 8 :little)
       (str->var-bytes (:user-agent pl))
       (int->bytes (:start-height pl) 4 :little)
@@ -254,19 +251,19 @@
 
 (defn encode-version-cmd>=70001 [version pl]
   (if (>= version 70001)
-    (int->bytes (:relay pl) 1 :little)
+   ; (int->bytes (:relay pl) 1 :little)
     []))
 
-(defmethod encode-cmd "version" [msg]
-  (let [pl (:payload msg)
-        version (:version pl)]
+(defmethod encode-cmd "version" [_ payload]
+  (let [version (:version payload)]
     (concat
-      (int->bytes version 4 :little) 
-      (int->bytes (services->int (:services pl)) 8 :big)
-      (int->bytes (:timestamp pl) 8 :little)
-      (network-address->bytes (:addr-recv pl) true)
-      (encode-version-cmd>=106 version pl)
-      (encode-version-cmd>=70001 version pl))))
+      (int->bytes version 4 :big) 
+      (int->bytes (services->int (:services payload)) 8 :big)
+      (int->bytes (:timestamp payload) 8 :little)
+      (network-address->bytes (:addr-recv payload) true)
+      (encode-version-cmd>=106 version payload)
+;      (encode-version-cmd>=70001 version payload)
+      )))
                   
   
 
@@ -298,22 +295,6 @@
      :port 8333}}})
 
 
-(def valid-payload    
-  [0x62 0xEA 0x00 0x00                                                                   ; 60002 (protocol version 60002)
-   0x01 00 00 00 00 00 00 00                                                       ; 1 (NODE_NETWORK services)
-   0x11 0xB2 0xD0 0x50 00 00 00 00                                                       ; Tue Dec 18 10:12:33 PST 2012
-   0x01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 0xFF 0xFF 00 00 00 00 00 00 ; Recipient address info - see Network Address
-   0x01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 0xFF 0xFF 00 00 00 00 00 00 ; Sender address info - see Network Address
-   0x3B 0x2E 0xB3 0x5D 0x8C 0xE6 0x17 0x65                                                       ; Node ID
-   0x0F 0x2F 0x53 0x61 0x74 0x6F 0x73 0x68 0x69 0x3A 0x30 0x2E 0x37 0x2E 0x32 0x2F                               ; "/Satoshi:0.7.2/" sub-version string (string is 15 bytes long)
-   0xC0 0x3E 0x03 0x00])
 
-(def valid-ver-msg 
-  (concat
-    [0xF9 0xBE 0xB4 0xD9                                                                   ;Main network magic bytes
-     0x76 0x65 0x72 0x73 0x69 0x6F 0x6E 0x00 0x00 0x00 0x00 0x00                                           ;"version" command
-     0x64 0x00 0x00 0x00                                                                   ;Payload is 100 bytes long
-     0x35 0x8d 0x49 0x32]
-    valid-payload))
    
                             
