@@ -5,7 +5,10 @@
            [java.nio.charset StandardCharsets]
            [java.time Instant]
            [java.security MessageDigest]))
-
+(defmacro dbg [body]
+  `(let [x# ~body]
+     (println "dbg:" '~body "=" x#)
+     x#))
 
 (defn pad [n coll val]
   (take n (concat coll (repeat val))))
@@ -30,10 +33,12 @@
     (.update sha-256 bytes)
     (.digest sha-256))
 
+(defn bytes->unsigned [bytes]
+  (map #(bit-and % 0xff) bytes))
 
 
 (defn calc-checksum-as-bytes [bytes]
-  (->> bytes bytes->sha256 bytes->sha256 (take 4)))
+  (bytes->unsigned (->> bytes bytes->sha256 bytes->sha256 (take 4))))
 
 (defn calc-checksum [bytes]
   (bytes->int (calc-checksum-as-bytes bytes) :little))
@@ -41,11 +46,10 @@
 
 
 
-
 (defn read-bytes [in n] 
   (let [bytes (byte-array n)]
     (.read in bytes)
-    bytes))
+    (bytes->unsigned bytes)))
 
 (defn read-int 
   ([in nr-of-bytes endian]
@@ -67,7 +71,7 @@
   
 (defn read-var-str [in]
   (let [n (read-var-int in)]
-    (String. (read-bytes in n) StandardCharsets/US_ASCII)))
+    (String. (byte-array (read-bytes in n)) StandardCharsets/US_ASCII)))
 
 (defn str->var-bytes [s]
   (let [n (count s)
@@ -80,32 +84,31 @@
     )))
 
 (defn read-timestamp [in nr-of-bytes]
-  (let [bytes (read-bytes in nr-of-bytes)]
-    )
-  )
+  (read-int in nr-of-bytes))
 
 
 (defn read-magic [in]
-  (read-int in 4))
+  (read-int in 4 :big))
 
 (defn read-cmd [in]
-  (String. (take-while #(> % 0) (read-bytes in 12)) StandardCharsets/US_ASCII))
+  (String. (byte-array (take-while #(> % 0) (read-bytes in 12))) StandardCharsets/US_ASCII))
   
 (defn cmd->bytes [cmd]
   (pad 12 (.getBytes cmd) 0))
   
 
 (defn read-length [in]
-  (read-int in 4))
+  (read-int in 4 :big))
 
 (defn read-checksum [in]
   (read-int in 4))
 
 (defn read-payload [in n checksum]
   (let [pl (read-bytes in n)]
-    (if (= (calc-checksum pl) checksum)
-      (ByteArrayInputStream. pl)
-      (throw (IllegalStateException. "Wrong checksum in payload")))))
+    (ByteArrayInputStream. (byte-array pl))
+    #_(if (= (calc-checksum pl) checksum)
+       (ByteArrayInputStream. pl)
+       (throw (IllegalStateException. "Wrong checksum in payload")))))
 
 
 (defn int->services [v]
@@ -134,8 +137,8 @@
   (doseq [b (read-bytes in 10)]
     (when (not= b 0) (throw (IllegalStateException. (format "byte should be 0 but is %s" b)))))
   (doseq [b (read-bytes in 2)]
-    (when (not= b -1) (throw (IllegalStateException. (format "byte should be -1 but is %s" b)))))
-   (read-bytes in 4))
+    (when (not= b 255) (throw (IllegalStateException. (format "byte should be 255 but is %s" b)))))
+   (map identity (read-bytes in 4)))
 
 (defn ip->bytes [ip]
   (concat
@@ -173,7 +176,7 @@
                               
 
 (defn read-version [in]
-  (read-int in 4))
+  (read-int in 4 :big))
 
 (defmulti decode-cmd (fn [msg] (:cmd msg)))
 (defmulti encode-cmd (fn [msg] (:cmd msg)))
@@ -185,8 +188,10 @@
       (let [m {:magic m
                :cmd (read-cmd in)
                :length (read-length in)
-               :checksum (read-checksum in)}
+               :checksum (read-checksum in)
+               }
             ]
+        m
         (decode-cmd (assoc m :payload (read-payload in (:length m) (:checksum m)))))
       (throw (IllegalStateException. "Wrong network magic value")))))
   
@@ -205,7 +210,23 @@
 (defn write-msg! [data out]
   (.write out (byte-array data)))
   
+(defn decode-version-cmd>=70001 [version cmd in]
+  (if (>= version 70001)
+    (assoc 
+      cmd)
+    cmd))
+  
 
+(defn decode-version-cmd>=106 [version cmd in]
+  (if (>= version 106)
+    (decode-version-cmd>=70001 version
+      (assoc cmd
+        :addr-from (read-network-address in true)
+        :nounce (read-int in 8 :big) 
+        :user-agent (read-var-str in)
+        :start-height (read-int in 4 :big))
+      in)
+    cmd))
 
 (defmethod decode-cmd "version" [msg] 
   (let [in (:payload msg)
@@ -217,7 +238,7 @@
              }
         version (:version cmd)
         ]
-    cmd)) ;TODO higher versions
+    (decode-version-cmd>=106 version cmd in)))
     
 
 
@@ -233,9 +254,7 @@
 
 (defn encode-version-cmd>=70001 [version pl]
   (if (>= version 70001)
-    (concat
-      (int->bytes (:relay pl) 1 :little)
-      )
+    (int->bytes (:relay pl) 1 :little)
     []))
 
 (defmethod encode-cmd "version" [msg]
@@ -265,9 +284,9 @@
 (def a-ver-msg 
   {:cmd "version", :payload 
    {:version 60002, 
-    :timestamp (.getEpochSecond (Instant/parse "2012-12-18T10:04:33.00Z")) 
+    :timestamp (.getEpochSecond (Instant/parse "2012-12-18T02:12:33.00Z")) 
     :services {},
-    :nounce (long (rand Long/MAX_VALUE))
+    :nounce 4264543111543658341 ;(long (rand Long/MAX_VALUE))
     :user-agent "Satoshi:0.7.2"
     :start-height 212672
     :relay 0
@@ -277,3 +296,24 @@
     :addr-recv
     {:time 0, :ip [103 80 168 57], 
      :port 8333}}})
+
+
+(def valid-payload    
+  [0x62 0xEA 0x00 0x00                                                                   ; 60002 (protocol version 60002)
+   0x01 00 00 00 00 00 00 00                                                       ; 1 (NODE_NETWORK services)
+   0x11 0xB2 0xD0 0x50 00 00 00 00                                                       ; Tue Dec 18 10:12:33 PST 2012
+   0x01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 0xFF 0xFF 00 00 00 00 00 00 ; Recipient address info - see Network Address
+   0x01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 0xFF 0xFF 00 00 00 00 00 00 ; Sender address info - see Network Address
+   0x3B 0x2E 0xB3 0x5D 0x8C 0xE6 0x17 0x65                                                       ; Node ID
+   0x0F 0x2F 0x53 0x61 0x74 0x6F 0x73 0x68 0x69 0x3A 0x30 0x2E 0x37 0x2E 0x32 0x2F                               ; "/Satoshi:0.7.2/" sub-version string (string is 15 bytes long)
+   0xC0 0x3E 0x03 0x00])
+
+(def valid-ver-msg 
+  (concat
+    [0xF9 0xBE 0xB4 0xD9                                                                   ;Main network magic bytes
+     0x76 0x65 0x72 0x73 0x69 0x6F 0x6E 0x00 0x00 0x00 0x00 0x00                                           ;"version" command
+     0x64 0x00 0x00 0x00                                                                   ;Payload is 100 bytes long
+     0x35 0x8d 0x49 0x32]
+    valid-payload))
+   
+                            
