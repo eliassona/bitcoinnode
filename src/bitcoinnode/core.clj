@@ -1,4 +1,5 @@
 (ns bitcoinnode.core
+  (:use [clojure.pprint])
   (:import [java.net Socket]
            [java.io BufferedInputStream BufferedOutputStream ByteArrayInputStream]
            [java.nio.charset StandardCharsets]
@@ -124,16 +125,16 @@
     ))
 
 (defn read-services [in]
-  (int->services (read-int in 8)))
+  (int->services (read-int in 8 :big)))
 
 
 ;(defn bytes->ip [bytes]
 
 (defn read-ip [in]
   (doseq [b (read-bytes in 10)]
-    (when (not= b 0) (throw (IllegalStateException. ""))))
+    (when (not= b 0) (throw (IllegalStateException. (format "byte should be 0 but is %s" b)))))
   (doseq [b (read-bytes in 2)]
-    (when (not= b 255) (throw (IllegalStateException. ""))))
+    (when (not= b -1) (throw (IllegalStateException. (format "byte should be -1 but is %s" b)))))
    (read-bytes in 4))
 
 (defn ip->bytes [ip]
@@ -147,7 +148,7 @@
 (defn read-network-address 
   ([in version-cmd?]
   ;TODO time  
-  {:time (when version-cmd? (read-timestamp in 4))
+  {:time (when (not version-cmd?) (read-timestamp in 4))
    :services (read-services in)
    :ip (read-ip in)
    :port (read-port in)
@@ -160,7 +161,7 @@
   ([addr version-cmd?]
   ;TODO time  
   (concat
-    (int->bytes (:time addr) 4 :little)
+    (if version-cmd? [] (int->bytes (:time addr) 4 :little))
     (int->bytes (services->int (:services addr)) 8 :little)
     (ip->bytes (:ip addr))
     (int->bytes (:port addr) 2 :big)
@@ -212,7 +213,7 @@
              :version (read-version in)
              :services (read-services in)
              :timestamp (read-timestamp in 8)
-             :recv-network-address (read-network-address in)
+             :addr-recv (read-network-address in true)
              }
         version (:version cmd)
         ]
@@ -242,9 +243,9 @@
         version (:version pl)]
     (concat
       (int->bytes version 4 :little) 
-      (int->bytes (services->int (:services pl)) 8 :little)
+      (int->bytes (services->int (:services pl)) 8 :big)
       (int->bytes (:timestamp pl) 8 :little)
-      (network-address->bytes (:addr-recv pl))
+      (network-address->bytes (:addr-recv pl) true)
       (encode-version-cmd>=106 version pl)
       (encode-version-cmd>=70001 version pl))))
                   
@@ -263,16 +264,16 @@
 
 (def a-ver-msg 
   {:cmd "version", :payload 
-   {:version 70001, 
-    :timestamp (.getEpochSecond (Instant/now)) 
+   {:version 60002, 
+    :timestamp (.getEpochSecond (Instant/parse "2012-12-18T10:04:33.00Z")) 
     :services {},
     :nounce (long (rand Long/MAX_VALUE))
-    :user-agent "bixus"
-    :start-height 0
+    :user-agent "Satoshi:0.7.2"
+    :start-height 212672
     :relay 0
     :addr-from
     {:time 0, :ip [88 129 173 173], 
      :port 8333}
     :addr-recv
-    {:time 0, :ip [81 243 68 123], 
+    {:time 0, :ip [103 80 168 57], 
      :port 8333}}})
