@@ -4,6 +4,8 @@
            [java.io BufferedInputStream BufferedOutputStream ByteArrayInputStream]
            [java.nio.charset StandardCharsets]
            [java.time Instant]
+           [java.nio.charset StandardCharsets]
+           [org.apache.commons.codec.binary Hex]
            [java.security MessageDigest]))
 (defmacro dbg [body]
   `(let [x# ~body]
@@ -23,22 +25,28 @@
 
 (defn bytes->int [bytes endian]
     (reduce (fn [acc v] (bit-or (bit-shift-left acc 8) v)) (endian-of bytes endian)))
-  
+
+(defn invert-endian [endian]
+  (condp = endian
+    :little :big
+    :big :little))
+
 (defn int->bytes [value nr-of-bytes endian]
-    (map #(bit-and (bit-shift-right value (* % 8)) 0xff) (endian-of (range nr-of-bytes) endian)))
+    (map #(bit-and (bit-shift-right value (* % 8)) 0xff) (endian-of (range nr-of-bytes) (invert-endian endian))))
 
 (def sha-256 (MessageDigest/getInstance "SHA-256"))
 
 (defn bytes->sha256 [bytes]
-    (.update sha-256 bytes)
-    (.digest sha-256))
+    (.digest sha-256 bytes))
 
 (defn bytes->unsigned [bytes]
   (map #(bit-and % 0xff) bytes))
 
 
 (defn calc-checksum-as-bytes [bytes]
-  (bytes->unsigned (->> bytes bytes->sha256 bytes->sha256 (take 4))))
+  (let [cs (bytes->unsigned (->> bytes bytes->sha256 bytes->sha256 (take 4)))]
+    (dbg (map #(Integer/toString % 16) cs))
+    cs))
 
 (defn calc-checksum [bytes]
   (bytes->int (calc-checksum-as-bytes bytes) :little))
@@ -104,6 +112,7 @@
   (read-int in 4))
 
 (defn read-payload [in n checksum]
+  (dbg n)
   (let [pl (read-bytes in n)]
     (ByteArrayInputStream. (byte-array pl))
     #_(if (= (calc-checksum pl) checksum)
@@ -112,18 +121,18 @@
 
 
 (defn int->services [v]
-  {:node-network (bit-and v 0x1)
-     :node-get-utxo (bit-and v 0x2)
-     :node-bloom (bit-and v 0x4)
-     :node_witness (bit-and v 0x8)
-     :node-network-limited (bit-and v 1024)})
+  {:node-network (= (bit-and v 0x1) 0x1)
+     :node-get-utxo (= (bit-and v 0x2) 0x2)
+     :node-bloom (= (bit-and v 0x4) 0x4)
+     :node-witness (= (bit-and v 0x8) 0x8)
+     :node-network-limited (= (bit-and v 1024) 1024)})
 
 (defn services->int [services]
   (bit-or
     (if (:node-network services) 1 0)
     (if (:node-get-utxo services) 2 0)
     (if (:node-bloom services) 4 0)
-    (if (:node_witness services) 8 0)
+    (if (:node-witness services) 8 0)
     (if (:node-network-limited services) 1024 0)
     ))
 
@@ -198,9 +207,9 @@
 (defn msg->bytes [msg magic]
   (let [payload (encode-cmd (:cmd msg) (:payload msg))]
     (concat 
-      (int->bytes magic 4 :little)
+      (int->bytes magic 4 :big)
       (cmd->bytes (:cmd msg))
-      (int->bytes (count payload) 4 :little)
+      (int->bytes (count payload) 4 :big)
       (calc-checksum-as-bytes (byte-array payload))
       payload
       ))) 
@@ -243,9 +252,9 @@
   (if (>= version 106)
     (concat
       (network-address->bytes (:addr-from pl) true)
-      (int->bytes (:nounce pl) 8 :little)
+      (int->bytes (:nounce pl) 8 :big)
       (str->var-bytes (:user-agent pl))
-      (int->bytes (:start-height pl) 4 :little)
+      (int->bytes (:start-height pl) 4 :big)
       )
     []))
 
