@@ -144,8 +144,9 @@
 (defn read-ip [in]
   (doseq [b (read-bytes in 10)]
     (when (not= b 0) (throw (IllegalStateException. (format "byte should be 0 but is %s" b)))))
-  (doseq [b (read-bytes in 2)]
-    (when (not= b 255) (throw (IllegalStateException. (format "byte should be 255 but is %s" b)))))
+  (read-bytes in 2)
+  #_(doseq [b (read-bytes in 2)]
+     (when (not= b 255) (throw (IllegalStateException. (format "byte should be 255 but is %s" b)))))
    (dbg (read-bytes in 4)))
 
 (defn ip->bytes [ip]
@@ -220,7 +221,7 @@
 (defn decode-version-cmd>=70001 [version cmd in]
   (if (>= version 70001)
     (assoc 
-      cmd)
+      cmd :relay (if (= (read-int in 1) 0) false true))
     cmd))
   
 
@@ -259,7 +260,7 @@
 
 (defn encode-version-cmd>=70001 [version pl]
   (if (>= version 70001)
-   ; (int->bytes (:relay pl) 1 :little)
+   (int->bytes (:relay pl) 1 :little)
     []))
 
 (defmethod encode-cmd "version" [_ payload]
