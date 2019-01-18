@@ -45,7 +45,7 @@
 
 (defn calc-checksum-as-bytes [bytes]
   (let [cs (bytes->unsigned (->> bytes bytes->sha256 bytes->sha256 (take 4)))]
-    (dbg (map #(Integer/toString % 16) cs))
+    (map #(Integer/toString % 16) cs)
     cs))
 
 (defn calc-checksum [bytes]
@@ -112,12 +112,11 @@
   (read-int in 4))
 
 (defn read-payload [in n checksum]
-  (dbg n)
-  (let [pl (read-bytes in n)]
-    (ByteArrayInputStream. (byte-array pl))
-    #_(if (= (calc-checksum pl) checksum)
-       (ByteArrayInputStream. pl)
-       (throw (IllegalStateException. "Wrong checksum in payload")))))
+  (let [pl (byte-array (read-bytes in n))]
+    ;(ByteArrayInputStream. (byte-array pl))
+    (if (= (calc-checksum pl) checksum)
+      (ByteArrayInputStream. pl)
+      (throw (IllegalStateException. "Wrong checksum in payload")))))
 
 
 (defn int->services [v]
@@ -147,7 +146,7 @@
     (when (not= b 0) (throw (IllegalStateException. (format "byte should be 0 but is %s" b)))))
   (doseq [b (read-bytes in 2)]
     (when (not= b 255) (throw (IllegalStateException. (format "byte should be 255 but is %s" b)))))
-   (map identity (read-bytes in 4)))
+   (dbg (read-bytes in 4)))
 
 (defn ip->bytes [ip]
   (concat
@@ -287,12 +286,20 @@
 (def testnet3 0x0709110B)
 
 
+(defn send-ver-msg [s ver-msg]
+  (.write (:out s) (byte-array (msg->bytes ver-msg mainnet)))
+  (.flush (:out s))
+  (let [ba (byte-array 200)]
+    (.read (:in s) ba)
+    (dbg (map #(Integer/toString % 16) (bytes->unsigned ba)))
+    (read-msg (ByteArrayInputStream. ba) mainnet)))
+
 (def a-ver-msg 
   {:cmd "version", :payload 
    {:version 60002, 
     :timestamp (.getEpochSecond (Instant/parse "2012-12-18T02:12:33.00Z")) 
     :services {},
-    :nounce 4264543111543658341 ;(long (rand Long/MAX_VALUE))
+    :nounce (long (rand Long/MAX_VALUE))
     :user-agent "Satoshi:0.7.2"
     :start-height 212672
     :relay 0
