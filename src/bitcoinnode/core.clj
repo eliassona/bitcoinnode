@@ -1,6 +1,7 @@
 (ns bitcoinnode.core
-  (:use [clojure.pprint])
-  (:import [java.net Socket]
+  (:use [clojure.pprint]
+        [clojure.repl])
+  (:import [java.net Socket InetAddress]
            [java.io BufferedInputStream BufferedOutputStream ByteArrayInputStream]
            [java.nio.charset StandardCharsets]
            [java.time Instant]
@@ -11,6 +12,9 @@
   `(let [x# ~body]
      (println "dbg:" '~body "=" x#)
      x#))
+
+(defn error [msg]
+  (throw (IllegalStateException. msg)))
 
 (defn pad [n coll val]
   (take n (concat coll (repeat val))))
@@ -116,7 +120,7 @@
     ;(ByteArrayInputStream. (byte-array pl))
     (if (= (calc-checksum pl) checksum)
       (ByteArrayInputStream. pl)
-      (throw (IllegalStateException. "Wrong checksum in payload")))))
+      (error "Wrong checksum in payload"))))
 
 
 (defn int->services [v]
@@ -143,11 +147,12 @@
 
 (defn read-ip [in]
   (doseq [b (read-bytes in 10)]
-    (when (not= b 0) (throw (IllegalStateException. (format "byte should be 0 but is %s" b)))))
+    (when (not= b 0) (error (format "byte should be 0 but is %s" b))))
   (read-bytes in 2)
+  ;TODO verification
   #_(doseq [b (read-bytes in 2)]
-     (when (not= b 255) (throw (IllegalStateException. (format "byte should be 255 but is %s" b)))))
-   (dbg (read-bytes in 4)))
+     (when (not= b 255) (error (format "byte should be 255 but is %s" b))))
+   (read-bytes in 4))
 
 (defn ip->bytes [ip]
   (concat
@@ -201,7 +206,7 @@
                }
             ]
         (assoc m :payload (decode-cmd (:cmd m) (read-payload in (:length m) (:checksum m)))))
-      (throw (IllegalStateException. "Wrong network magic value")))))
+      (error (format "Wrong network magic value, expected %s, actual %s", magic m)))))
   
 
 (defn msg->bytes [msg magic]
@@ -216,7 +221,8 @@
 
 
 (defn write-msg! [data out]
-  (.write out (byte-array data)))
+  (.write out (byte-array data))
+  (.flush out))
   
 (defn decode-version-cmd>=70001 [version cmd in]
   (if (>= version 70001)
@@ -246,6 +252,8 @@
      ]
     (decode-version-cmd>=106 version cmd in)))
     
+(defmethod decode-cmd "verack" [_ in]
+  )
 
 
 (defn encode-version-cmd>=106 [version pl]
@@ -273,7 +281,9 @@
       (encode-version-cmd>=106 version payload)
 ;      (encode-version-cmd>=70001 version payload)
       )))
-                  
+
+(defmethod encode-cmd "verack" [_ _]
+  [])                  
   
 
 (defn open-socket [host port]
@@ -287,13 +297,20 @@
 (def testnet3 0x0709110B)
 
 
-(defn send-ver-msg [s ver-msg]
+(defn send-ver-msg [s ver-msg ver-ack-msg]
   (.write (:out s) (byte-array (msg->bytes ver-msg mainnet)))
   (.flush (:out s))
-  (let [ba (byte-array 200)]
-    (.read (:in s) ba)
-    (dbg (map #(Integer/toString % 16) (bytes->unsigned ba)))
-    (read-msg (ByteArrayInputStream. ba) mainnet)))
+  (dbg (read-msg (:in s) mainnet))
+  (read-msg (:in s) mainnet)
+  (.write (:out s) (byte-array (msg->bytes ver-ack-msg mainnet)))
+  (.flush (:out s))
+  )
+
+
+
+(def a-ver-ack-msg 
+  {:cmd "verack", :payload 
+   {}})
 
 (def a-ver-msg 
   {:cmd "version", :payload 
@@ -305,12 +322,35 @@
     :start-height 212672
     :relay 0
     :addr-from
-    {:time 0, :ip [88 129 173 173], 
+    {:time 0, :ip (vec (.getAddress (InetAddress/getLocalHost))), 
      :port 8333}
     :addr-recv
     {:time 0, :ip [103 80 168 57], 
      :port 8333}}})
 
+
+(defn ip-str->coll [ip]
+  (map read-string (.split ip "\\.")))
+
+(defn handshake [host net]
+  (let [s (open-socket host 8333)
+        out (:out s)
+        in (:in s)]
+    (write-msg!  
+      (msg->bytes 
+        (assoc a-ver-msg :addr-from {:time 0, :ip (ip-str->coll host), 
+                                     :port 8333}) net) out)
+    (let [rec-ver (dbg (read-msg in net))]
+      (when (not= (:cmd rec-ver) "version") (error "Received incorrect version message"))  
+      (let [rec-verack (read-msg in net)]
+        (when (not= (:cmd rec-verack) "verack") (error "Received incorrect verack message"))  
+        (write-msg! (msg->bytes a-ver-ack-msg net) out)
+        (assoc s :rec-ver rec-ver, :rec-verack rec-verack)))))
+        
+      
+      
+    
+  
 
 
    
