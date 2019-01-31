@@ -1,6 +1,7 @@
 (ns bitcoinnode.core
   (:use [clojure.pprint]
         [clojure.repl])
+  (:require [clojure.core.async :as async])
   (:import [java.net Socket InetAddress]
            [java.io BufferedInputStream BufferedOutputStream ByteArrayInputStream]
            [java.nio.charset StandardCharsets]
@@ -15,6 +16,11 @@
 
 (defn error [msg]
   (throw (IllegalStateException. msg)))
+
+(defn curr-time-in-sec []
+  (-> (Instant/now) .getEpochSecond))
+
+(defn nounce [] (long (rand Long/MAX_VALUE)))
 
 (defn pad [n coll val]
   (take n (concat coll (repeat val))))
@@ -253,8 +259,20 @@
     (decode-version-cmd>=106 version cmd in)))
     
 (defmethod decode-cmd "verack" [_ in]
+  {}
   )
 
+(defmethod decode-cmd "alert" [_ in]
+  {}
+  )
+(defmethod decode-cmd "ping" [_ in]
+  {:nounce (read-int in 8 :big)} 
+  )
+
+(defmethod decode-cmd "addr" [_ in]
+  (let [n (read-var-int in)]
+    
+  )
 
 (defn encode-version-cmd>=106 [version pl]
   (if (>= version 106)
@@ -312,13 +330,19 @@
   {:cmd "verack", :payload 
    {}})
 
+
+
 (def a-ver-msg 
   {:cmd "version", :payload 
    {:version 60002, 
-    :timestamp (.getEpochSecond (Instant/parse "2012-12-18T02:12:33.00Z")) 
-    :services {},
-    :nounce (long (rand Long/MAX_VALUE))
-    :user-agent "Satoshi:0.7.2"
+    :timestamp (curr-time-in-sec) 
+    :services {:node-network true, 
+               :node-get-utxo true,
+               :node-bloom true,
+               :node-witness true
+               :node-network-limited true}
+    :nounce (nounce)
+    :user-agent "bixus"
     :start-height 212672
     :relay 0
     :addr-from
@@ -338,7 +362,7 @@
         in (:in s)]
     (write-msg!  
       (msg->bytes 
-        (assoc a-ver-msg :addr-from {:time 0, :ip (ip-str->coll host), 
+        (assoc a-ver-msg :addr-from {:time (curr-time-in-sec), :ip (ip-str->coll host), 
                                      :port 8333}) net) out)
     (let [rec-ver (dbg (read-msg in net))]
       (when (not= (:cmd rec-ver) "version") (error "Received incorrect version message"))  
@@ -350,8 +374,15 @@
       
       
     
-  
+(defn read-cmd-proc [in]
+  (async/go
+    (while true
+      (dbg "starting loop")
+      (dbg (read-msg in mainnet)))))  
 
-
+(comment 
+(def con (handshake "103.80.168.57" mainnet))
+(read-cmd-proc (:in con))
+)
    
-                            
+                             
