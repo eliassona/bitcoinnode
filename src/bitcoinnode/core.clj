@@ -198,11 +198,11 @@
 (defn read-version [in]
   (read-int in 4 :big))
 
-(defmulti decode-cmd (fn [cmd in] cmd))
+(defmulti decode-cmd (fn [cmd version in] cmd))
 (defmulti encode-cmd (fn [cmd payload] cmd))
 
 
-(defn read-msg [in magic]
+(defn read-msg [in version magic]
   (let [m (read-magic in)]
     (if (= m magic)
       (let [m {:magic m
@@ -211,7 +211,7 @@
                :checksum (read-checksum in)
                }
             ]
-        (assoc m :payload (decode-cmd (:cmd m) (read-payload in (:length m) (:checksum m)))))
+        (assoc m :payload (decode-cmd (:cmd m) version (read-payload in (:length m) (:checksum m)))))
       (error (format "Wrong network magic value, expected %s, actual %s", magic m)))))
   
 
@@ -248,7 +248,7 @@
       in)
     cmd))
 
-(defmethod decode-cmd "version" [_ in] 
+(defmethod decode-cmd "version" [_ _ in] 
   (let [cmd {:version (read-version in)
              :services (read-services in)
              :timestamp (read-timestamp in 8)
@@ -258,21 +258,29 @@
      ]
     (decode-version-cmd>=106 version cmd in)))
     
-(defmethod decode-cmd "verack" [_ in]
+(defmethod decode-cmd "verack" [_ _ in]
   {}
   )
 
-(defmethod decode-cmd "alert" [_ in]
+(defmethod decode-cmd "alert" [_ _ in]
   {}
   )
-(defmethod decode-cmd "ping" [_ in]
+(defmethod decode-cmd "ping" [_ _ in]
   {:nounce (read-int in 8 :big)} 
   )
 
-(defmethod decode-cmd "addr" [_ in]
-  (let [n (read-var-int in)]
-    
+(defmethod decode-cmd "addr" [_ version in]
+  (let [n (read-var-int in)
+        b (< version 31402)]
+     (map (fn [_] (read-network-address in b)) (range n))))
+
+(defmethod decode-cmd "getheaders" [_ _ in]
+  {:version (read-version in)
+   :hash-count (read-var-int in)
+   }
   )
+(defmethod decode-cmd "inv" [_ _ in]
+    {:count (read-var-int in)})
 
 (defn encode-version-cmd>=106 [version pl]
   (if (>= version 106)
@@ -315,14 +323,7 @@
 (def testnet3 0x0709110B)
 
 
-(defn send-ver-msg [s ver-msg ver-ack-msg]
-  (.write (:out s) (byte-array (msg->bytes ver-msg mainnet)))
-  (.flush (:out s))
-  (dbg (read-msg (:in s) mainnet))
-  (read-msg (:in s) mainnet)
-  (.write (:out s) (byte-array (msg->bytes ver-ack-msg mainnet)))
-  (.flush (:out s))
-  )
+
 
 
 
@@ -364,9 +365,10 @@
       (msg->bytes 
         (assoc a-ver-msg :addr-from {:time (curr-time-in-sec), :ip (ip-str->coll host), 
                                      :port 8333}) net) out)
-    (let [rec-ver (dbg (read-msg in net))]
+    (let [rec-ver (dbg (read-msg in 0 net))
+          version (:version rec-ver)]
       (when (not= (:cmd rec-ver) "version") (error "Received incorrect version message"))  
-      (let [rec-verack (read-msg in net)]
+      (let [rec-verack (read-msg in version net)]
         (when (not= (:cmd rec-verack) "verack") (error "Received incorrect verack message"))  
         (write-msg! (msg->bytes a-ver-ack-msg net) out)
         (assoc s :rec-ver rec-ver, :rec-verack rec-verack)))))
@@ -374,15 +376,14 @@
       
       
     
-(defn read-cmd-proc [in]
+(defn read-cmd-proc [in version]
   (async/go
     (while true
-      (dbg "starting loop")
-      (dbg (read-msg in mainnet)))))  
+      (dbg (read-msg in version mainnet)))))  
 
 (comment 
 (def con (handshake "103.80.168.57" mainnet))
-(read-cmd-proc (:in con))
+(read-cmd-proc (:in con) (-> con :rec-ver :payload :version))
 )
    
                              
