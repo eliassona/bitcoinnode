@@ -279,8 +279,14 @@
    :hash-count (read-var-int in)
    }
   )
+
+(defn inv-vector [in _]
+    {:type (read-int in 4 :big)
+     :hash (read-bytes in 32)})
+
 (defmethod decode-cmd "inv" [_ _ in]
-    {:count (read-var-int in)})
+  (let [n (read-var-int in)]
+    {:inventory (map (partial inv-vector in) (range n))}))
 
 (defn encode-version-cmd>=106 [version pl]
   (if (>= version 106)
@@ -309,8 +315,14 @@
       )))
 
 (defmethod encode-cmd "verack" [_ _]
-  [])                  
+  [])
+
+(defmethod encode-cmd "getaddr" [_ _]
+  [])
   
+(defmethod encode-cmd "pong" [_ payload]
+  (int->bytes (:nounce payload) 8 :big))
+
 
 (defn open-socket [host port]
   (let [s (Socket. host port)]
@@ -323,12 +335,12 @@
 (def testnet3 0x0709110B)
 
 
-
-
-
-
-(def a-ver-ack-msg 
+(def ver-ack-msg 
   {:cmd "verack", :payload 
+   {}})
+
+(def getaddr-msg 
+  {:cmd "getaddr", :payload 
    {}})
 
 
@@ -370,20 +382,37 @@
       (when (not= (:cmd rec-ver) "version") (error "Received incorrect version message"))  
       (let [rec-verack (read-msg in version net)]
         (when (not= (:cmd rec-verack) "verack") (error "Received incorrect verack message"))  
-        (write-msg! (msg->bytes a-ver-ack-msg net) out)
+        (write-msg! (msg->bytes ver-ack-msg net) out)
         (assoc s :rec-ver rec-ver, :rec-verack rec-verack)))))
         
       
-      
+(defmulti react (fn [msg con] (:cmd msg)))
+
+(defmethod react "inv" [msg _]
+  )
+
+(defmethod react "alert" [msg _]
+  (dbg msg))
+(defmethod react "addr" [msg _]
+  (dbg msg))
+(defmethod react "getheaders" [msg _]
+  (dbg msg))
+
+(defmethod react "ping" [msg con]
+  (let [out (:out con)]
+    (dbg msg)
+    (write-msg! (msg->bytes {:cmd "pong", :payload {:nounce (-> msg :payload :nounce)}} (-> con :rec-ver :magic)) out)))
+
     
-(defn read-cmd-proc [in version]
-  (async/go
-    (while true
-      (dbg (read-msg in version mainnet)))))  
+(defn read-cmd-proc [con version]
+  (let [in (:in con)]
+    (async/go
+      (while true
+        (react (read-msg in version mainnet) con)))))  
 
 (comment 
 (def con (handshake "103.80.168.57" mainnet))
-(read-cmd-proc (:in con) (-> con :rec-ver :payload :version))
+(read-cmd-proc con (-> con :rec-ver :payload :version))
 )
    
                              
