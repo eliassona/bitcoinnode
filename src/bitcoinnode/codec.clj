@@ -54,8 +54,15 @@
    }
   )
 
+(def inv-type-map
+  {0 :error,
+   1 :msg-tx,
+   2 :msg-filtered-block,
+   3 :msg-cmpct-block 
+   })
+
 (defn inv-vector [in _]
-    {:type (read-int in 4 :big)
+    {:type (inv-type-map (read-int in 4 :big))
      :hash (read-bytes in 32)})
 
 (defmethod decode-cmd "inv" [_ _ in]
@@ -97,6 +104,9 @@
 (defmethod encode-cmd "pong" [_ payload]
   (int->bytes (:nounce payload) 8 :big))
 
+(defmethod encode-cmd "ping" [_ payload]
+  (int->bytes (nounce) 8 :big))
+
 (def ver-ack-msg 
   {:cmd "verack", :payload 
    {}})
@@ -109,10 +119,10 @@
   {:cmd "version", :payload 
    {:version 60002, 
     :timestamp (curr-time-in-sec) 
-    :services {:node-network true, 
-               :node-get-utxo true,
-               :node-bloom true,
-               :node-witness true
+    :services {:node-network false, 
+               :node-get-utxo false,
+               :node-bloom false,
+               :node-witness false
                :node-network-limited true}
     :nounce (nounce)
     :user-agent "bixus"
@@ -135,7 +145,7 @@
       (msg->bytes 
         (assoc a-ver-msg :addr-from {:time (curr-time-in-sec), :ip (ip-str->coll host), 
                                      :port 8333}) net) out)
-    (let [rec-ver (dbg (read-msg in 0 net))
+    (let [rec-ver (read-msg in 0 net)
           version (:version rec-ver)]
       (when (not= (:cmd rec-ver) "version") (error "Received incorrect version message"))  
       (let [rec-verack (read-msg in version net)]
@@ -147,6 +157,7 @@
 (defmulti react (fn [msg con] (:cmd msg)))
 
 (defmethod react "inv" [msg _]
+  (dbg msg)
   )
 
 (defmethod react "alert" [msg _]
@@ -155,6 +166,16 @@
   (dbg msg))
 (defmethod react "getheaders" [msg _]
   (dbg msg))
+
+
+(defn pong-of [ping net]
+  (msg->bytes {:cmd "pong", :payload {:nounce (-> ping :payload :nounce)}} net))
+
+(defn send-pong [ping con]
+  (write-msg! (pong-of ping (-> con :rec-ver :magic)) (:out con)))         
+
+(defn send-ping [con]
+  (write-msg! (msg->bytes {:cmd "ping" :payload []} (-> con :rec-ver :magic)) (:out con)))
 
 (defmethod react "ping" [msg con]
   (let [out (:out con)]

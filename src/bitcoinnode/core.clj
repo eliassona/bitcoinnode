@@ -238,7 +238,8 @@
 
 (def mainnet 0xD9B4BEF9)
 (def testnet3 0x0709110B)
-
+(def testnet 0xDAB5BFFA)
+(def namecoin 0xFEB4BEF9)
   
    
                              
